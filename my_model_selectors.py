@@ -66,6 +66,8 @@ class SelectorBIC(ModelSelector):
 
     http://www2.imm.dtu.dk/courses/02433/doc/ch6_slides.pdf
     Bayesian information criteria: BIC = -2 * logL + p * logN
+    p = n*(n-1) + (n-1) + 2*d*n
+    where n = # of states , d = # of features
     """
 
     def select(self):
@@ -75,9 +77,21 @@ class SelectorBIC(ModelSelector):
         :return: GaussianHMM object
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        best_bic, best_model =  float("inf"), self.base_model(self.n_constant)
+        N, d = self.X.shape
+        for n in range(self.min_n_components,self.max_n_components+1):
+            model = self.base_model(n)
+            if model:
+                try:
+                    logL = model.score(self.X, self.lengths)
+                    p = n*(n-1) + (n-1) + 2*d*n
+                    bic = -2*logL + p*np.log(N)
+                    if bic < best_bic:
+                        best_bic = bic
+                        best_model = model
+                except:
+                    pass
+        return best_model
 
 
 class SelectorDIC(ModelSelector):
@@ -91,9 +105,31 @@ class SelectorDIC(ModelSelector):
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        models = []
+        logL_values = []
+        for n in range(self.min_n_components, self.max_n_components+1):
+            model = self.base_model(n)
+            if model is not None:
+                try:
+                    models.append(model)
+                    logL_values.append(model.score(self.X, self.lengths))
+                except:
+                    pass
+        s = sum(logL_values)
+        M = len(models)
+        if M == 0:
+            return self.base_model(self.n_constant)
+        elif M == 1:
+            return models[0]
+        else:
+            best_dic = float("-inf")
+            best_model = None
+            for i, logL in enumerate(logL_values):
+                dic = logL - (1/(M-1))*(s-logL)
+                if  dic > best_dic:
+                    best_dic = dic
+                    best_model = models[i]
+            return best_model
 
 
 class SelectorCV(ModelSelector):
@@ -103,6 +139,31 @@ class SelectorCV(ModelSelector):
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        max_logL =  float("-inf")
+        best_num_states = -1
+        if(len(self.sequences) <= 2):   # there isn't enough data:
+            return self.base_model(self.n_constant)
+        for num_states in range(self.min_n_components, self.max_n_components+1):
+            sum_logL = 0
+            count = 0
+            for cv_train_idx, cv_test_idx in KFold(n_splits=min(3,len(self.sequences)-1)).split(self.sequences):
+                try:
+                    X_train,lengths_train = combine_sequences(cv_train_idx,self.sequences)
+                    model = GaussianHMM(n_components=num_states, covariance_type="diag", n_iter=1000,
+                                            random_state=self.random_state, verbose=False).fit(X_train, lengths_train)
+                    X_test, lengths_test = combine_sequences(cv_test_idx,self.sequences)
+                    logL = model.score(X_test, lengths_test)
+                    sum_logL += logL
+                    count += 1
+                except:
+                    pass
+            if count == 0:
+                continue
+            mean_logL = sum_logL/count
+            if mean_logL > max_logL:
+                max_logL = mean_logL
+                best_num_states = num_states
+        if best_num_states != 0:
+            return self.base_model(best_num_states)
+        else:
+            return self.base_model(self.n_constant)
